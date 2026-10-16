@@ -5,6 +5,9 @@ let menuItems = [];
 let selectedCategory = "";
 let activeFlavor = "";
 let reservationDraft = null;
+let menuSearchUsesMilvus = false;
+let menuSearchRequest = 0;
+let menuSearchTimer = null;
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({
@@ -43,7 +46,7 @@ function renderMenu() {
   const filtered = menuItems.filter((item) => {
     const categoryMatch = !selectedCategory || item.category === selectedCategory;
     const searchText = `${item.dish_name} ${item.category} ${item.description} ${(item.flavors || []).join(" ")}`.toLocaleLowerCase();
-    return categoryMatch && (!keyword || searchText.includes(keyword));
+    return categoryMatch && (!keyword || menuSearchUsesMilvus || searchText.includes(keyword));
   });
   $("#menuGrid").innerHTML = filtered.length
     ? filtered.map(menuCard).join("")
@@ -179,7 +182,29 @@ function setupMenu() {
     $$("#menuFilters button").forEach((node) => node.classList.toggle("active", node === button));
     renderMenu();
   });
-  $("#menuSearch").addEventListener("input", renderMenu);
+  $("#menuSearch").addEventListener("input", () => {
+    const query = $("#menuSearch").value.trim();
+    const requestId = ++menuSearchRequest;
+    clearTimeout(menuSearchTimer);
+    if (!query) {
+      menuSearchUsesMilvus = false;
+      loadMenu();
+      return;
+    }
+    menuSearchTimer = setTimeout(async () => {
+      $("#menuGrid").innerHTML = '<div class="loading-card">正在用 Milvus 检索菜单…</div>';
+      try {
+        const data = await api(`/api/search/menu?query=${encodeURIComponent(query)}&limit=10`);
+        if (requestId !== menuSearchRequest || query !== $("#menuSearch").value.trim()) return;
+        menuItems = data.items || [];
+        menuSearchUsesMilvus = true;
+        renderMenu();
+      } catch (error) {
+        if (requestId !== menuSearchRequest) return;
+        $("#menuGrid").innerHTML = `<div class="empty-card">菜单语义检索暂时不可用：${escapeHtml(error.message)}</div>`;
+      }
+    }, 220);
+  });
 }
 
 function setupBooking() {

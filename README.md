@@ -1,12 +1,13 @@
 # 六合餐厅点餐与配送服务
 
-本项目提供一套可直接运行的餐厅网站和 FastAPI 后端，包含菜单展示、口味推荐、特色菜推荐、预订、预订查询、配送范围查询，以及可以调用配送服务的对话 Agent。
+本项目提供一套餐厅网站和 FastAPI 后端，包含菜单展示、Milvus 向量检索、口味推荐、特色菜推荐、预订、预订查询、配送范围查询，以及可以调用配送服务的对话 Agent。
 
-默认使用规则型 mock Agent，因此运行对话不需要模型账号或模型 API Key。业务数据保存到本地 SQLite，首次启动会创建数据库并写入完整菜单样例。配送服务可以使用本地演示坐标，也可以接入高德地图官方 MCP Server。原项目的 LangChain/MySQL 扩展源码保留在 `agent/`，网站启动流程不会加载它。
+默认使用规则型 mock Agent 和本地 mock embedding，因此不需要模型账号、模型 API Key 或模型下载。项目通过 PyMilvus 客户端连接远端 Milvus/Zilliz 服务；不会在本机启动或安装 Milvus 服务。SQLite 保留菜单结构化事实和预订数据，向量检索后再以 SQLite 核实价格与供应状态。配送服务可以使用本地演示坐标，也可以接入高德地图官方 MCP Server。原项目的 LangChain/MySQL 扩展源码保留在 `agent/`，网站启动流程不会加载它。
 
 ## 功能
 
 - **菜单展示：** 按菜品分类浏览、关键词搜索，展示价格、风味、供应状态和过敏原信息。
+- **Milvus 向量检索：** 菜单搜索框、口味推荐和 Agent 的自然语言菜品推荐调用 Milvus；菜单事实再由 SQLite 核对。默认采用本地 Milvus Lite 和确定性 mock embedding。
 - **口味推荐：** 按清淡、鲜香、麻辣、香辣、甜口、咸甜、浓郁七类风味筛选可供应菜品。
 - **特色菜推荐：** 展示特色菜及其供应状态。
 - **预订：** 登记联系人、人数、儿童人数、上海时间到店时间、座位偏好、主菜偏好和备注；提交前展示完整信息，用户明确确认后才写入。
@@ -25,6 +26,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
 cp .env.example .env
+# 在 .env 中填写老师提供的 MILVUS_URI 和需要的 MILVUS_TOKEN
 uvicorn main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
@@ -50,11 +52,24 @@ DELIVERY_RADIUS_KM=5
 
 高德官方接入说明：[MCP Server 快速接入](https://lbs.amap.com/api/mcp-server/gettingstarted) · [创建应用和 Key](https://lbs.amap.com/api/mcp-server/create-project-and-key)
 
+## Milvus 配置
+
+项目使用远端 Milvus 服务，不会在本机安装或启动 Milvus。安装 Python 依赖只会安装 PyMilvus 客户端；服务端地址和凭据由老师或课程环境提供。首次启动时程序会连接该服务，创建 `restaurant_menu` collection（不存在时），并将 SQLite 菜单向量 upsert 到 collection。
+
+```dotenv
+MILVUS_URI=https://your-milvus-endpoint
+MILVUS_COLLECTION=restaurant_menu
+MILVUS_TOKEN=your-token-if-required
+```
+
+将 `.env.example` 复制为 `.env` 后，必须把 `MILVUS_URI` 替换成实际服务地址，并按服务配置 `MILVUS_TOKEN`。未配置远端地址时，应用会明确报错，不会退回内存索引或本地数据库。本地默认 embedding 是用于无模型环境的确定性 mock；替换成真实 embedding 模型时，collection 中已有向量应重新生成。真实 token 只放在未提交的 `.env` 中。
+
 ## API 一览
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
 | `GET` | `/api/menu` | 菜单，可按 `category`、`flavor`、`keyword` 筛选 |
+| `GET` | `/api/search/menu?query=清淡的鱼` | Milvus 菜单语义检索，返回相似度和当前 SQLite 菜单事实 |
 | `GET` | `/api/recommendations/flavor?flavor=清淡` | 口味推荐 |
 | `GET` | `/api/recommendations/featured` | 特色菜推荐 |
 | `POST` | `/api/reservations` | 显式确认后创建预订 |
@@ -81,6 +96,7 @@ DELIVERY_RADIUS_KM=5
 - 本地数据库默认位置：`data/restaurant.sqlite3`，由 `.gitignore` 排除，不应提交。
 - 可通过 `DATABASE_PATH` 更换 SQLite 数据库文件位置。
 - 菜单演示数据位于 `restaurant_app/database.py` 的 `MENU_SEED`，供应状态保存在数据库中。
+- Milvus collection 保存于远端服务；连接配置使用 `.env` 中的 `MILVUS_URI`、`MILVUS_TOKEN` 和 `MILVUS_COLLECTION`。embedding 逻辑位于 `restaurant_app/vector_search.py`。
 - `sql/schema.sql` 是旧 LangChain/MySQL Agent 连接方式的 MySQL 表结构；FastAPI 网站使用 SQLite，不需要安装或配置 MySQL。
 - `.env` 保存本机配置，不应提交到公开仓库。`.env.example` 不包含密钥。
 

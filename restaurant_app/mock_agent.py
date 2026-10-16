@@ -20,6 +20,17 @@ CANCEL_PATTERN = re.compile(r"^(?:取消|取消预订|取消预约|取消订位|
 class MockRestaurantAgent:
     """Deterministic, model-free dialogue flow for the classroom application."""
 
+    def __init__(self) -> None:
+        self.menu_index: Any | None = None
+
+    def rank_menu(self, query: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Rank SQL-filtered menu facts by Milvus similarity."""
+        if not items or self.menu_index is None:
+            return items
+        hits = self.menu_index.search(query, limit=max(len(repository.list_menu()), len(items)))
+        rank = {hit["dish_name"]: index for index, hit in enumerate(hits)}
+        return sorted(items, key=lambda item: rank.get(item["dish_name"], len(rank)))
+
     async def reply(self, session_id: str, message: str) -> dict[str, Any]:
         text = message.strip()
         state = repository.load_chat_state(session_id)
@@ -46,7 +57,8 @@ class MockRestaurantAgent:
         if self._is_flavor_question(text):
             flavor = next((flavor for flavor in FLAVORS if flavor in text), None)
             if flavor:
-                items = [item for item in repository.list_menu(flavor=flavor) if item["is_available"]]
+                candidates = repository.list_menu(flavor=flavor)
+                items = [item for item in self.rank_menu(text, candidates) if item["is_available"]]
                 return {"answer": _format_menu(items, f"{flavor}口味推荐"), "intent": "flavor_recommendation"}
             return {
                 "answer": "你偏好哪种口味？我可以推荐清淡、鲜香、麻辣、香辣、甜口或浓郁风味的菜品。",
@@ -54,8 +66,9 @@ class MockRestaurantAgent:
             }
 
         if re.search(r"特色菜|招牌菜|推荐菜", text):
+            items = self.rank_menu(text, repository.featured_dishes())
             return {
-                "answer": _format_menu(repository.featured_dishes(), "六合餐厅特色菜"),
+                "answer": _format_menu(items, "六合餐厅特色菜"),
                 "intent": "featured_recommendation",
             }
 
@@ -68,6 +81,14 @@ class MockRestaurantAgent:
             return {
                 "answer": f"{dish['dish_name']}：¥{dish['price']:.0f}，{availability}。{dish['description']}",
                 "intent": "menu_item_lookup",
+            }
+
+        if re.search(r"推荐|想吃|想来|来点|来一道|来道|适合我|不太辣|不辣|不油腻", text):
+            items = self.rank_menu(text, repository.list_menu())
+            items = [item for item in items if item["is_available"]][:4]
+            return {
+                "answer": _format_menu(items, "按你的描述从菜单中检索到"),
+                "intent": "semantic_menu_recommendation",
             }
 
         return {

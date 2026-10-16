@@ -7,4 +7,7 @@ __pycache__/
 data/*.sqlite3
 data/*.sqlite3-shm
 data/*.sqlite3-wal
+data/*.db
+data/*.db-*
+03_order_agent.egg-info/
 .DS_Store

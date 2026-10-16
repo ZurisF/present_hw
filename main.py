@@ -21,17 +21,30 @@ from restaurant_app.delivery import MapsServiceUnavailable, check_delivery  # no
 from restaurant_app.mock_agent import MockRestaurantAgent  # noqa: E402
 from restaurant_app.repository import IdempotencyConflict  # noqa: E402
 from restaurant_app.schemas import ChatRequest, ChatResponse, DeliveryRequest, ReservationCreate  # noqa: E402
+from restaurant_app.vector_search import MenuVectorIndex  # noqa: E402
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("restaurant_app")
 STATIC_PATH = ROOT_PATH / "static"
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 agent = MockRestaurantAgent()
+menu_vector_index: MenuVectorIndex | None = None
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    global menu_vector_index
     initialize_database()
+    menu_vector_index = MenuVectorIndex.from_environment()
+    menu_vector_index.initialize(repository.list_menu())
+    agent.menu_index = menu_vector_index
+    logger.info(
+        "Milvus menu index ready",
+        extra={
+            "collection": menu_vector_index.collection_name,
+            "deployment": menu_vector_index.deployment,
+        },
+    )
     try:
         recovered = repository.recover_pending_reservations()
         if recovered:
@@ -67,7 +80,14 @@ def health() -> dict[str, str]:
         maps_provider = "amap" if has_amap_url else "amap-unconfigured"
     else:
         maps_provider = "amap" if has_amap_url else "demo"
-    return {"status": "ok", "agent_backend": "mock", "maps_provider": maps_provider}
+    return {
+        "status": "ok",
+        "agent_backend": "mock",
+        "maps_provider": maps_provider,
+        "vector_db": "milvus" if menu_vector_index else "unavailable",
+        "milvus_deployment": menu_vector_index.deployment if menu_vector_index else "unavailable",
+        "embedding_backend": "mock-hash",
+    }
 
 
 @app.get("/api/menu", tags=["菜单"])
@@ -81,18 +101,52 @@ def menu(
 
 @app.get("/api/recommendations/featured", tags=["推荐"])
 def featured_recommendations() -> dict:
-    return {"success": True, "items": repository.featured_dishes()}
+    items = repository.featured_dishes()
+    try:
+        items = agent.rank_menu("特色菜 招牌菜", items)
+    except Exception as exc:
+        logger.exception("Milvus featured-dish search failed")
+        raise HTTPException(status_code=503, detail="Milvus 菜单检索暂时不可用") from exc
+    return {"success": True, "retrieval_backend": "milvus", "items": items}
 
 
 @app.get("/api/recommendations/flavor", tags=["推荐"])
 def flavor_recommendations(flavor: str = Query(min_length=1, max_length=40)) -> dict:
     normalized = flavor.strip()
-    items = [item for item in repository.list_menu(flavor=normalized) if item["is_available"]]
+    candidates = repository.list_menu(flavor=normalized)
+    try:
+        items = agent.rank_menu(normalized, candidates)
+    except Exception as exc:
+        logger.exception("Milvus flavor recommendation search failed")
+        raise HTTPException(status_code=503, detail="Milvus 菜单检索暂时不可用") from exc
+    items = [item for item in items if item["is_available"]]
     if not items:
         known = ("清淡", "鲜香", "麻辣", "香辣", "甜口", "咸甜", "浓郁")
         if normalized not in known:
             raise HTTPException(status_code=422, detail={"message": "口味选项不支持", "available_flavors": known})
-    return {"success": True, "flavor": normalized, "items": items}
+    return {"success": True, "flavor": normalized, "retrieval_backend": "milvus", "items": items}
+
+
+@app.get("/api/search/menu", tags=["菜单"])
+def semantic_menu_search(
+    query: str = Query(min_length=1, max_length=160),
+    limit: int = Query(default=5, ge=1, le=20),
+) -> dict:
+    """Search menu candidates in Milvus, then hydrate authoritative facts from SQLite."""
+    if menu_vector_index is None:
+        raise HTTPException(status_code=503, detail="Milvus 菜单检索尚未就绪")
+    try:
+        hits = menu_vector_index.search(query, limit=limit)
+    except Exception as exc:
+        logger.exception("Milvus semantic menu search failed")
+        raise HTTPException(status_code=503, detail="Milvus 菜单检索暂时不可用") from exc
+    menu_by_name = {item["dish_name"]: item for item in repository.list_menu()}
+    items = [
+        {**menu_by_name[hit["dish_name"]], "similarity": hit["score"]}
+        for hit in hits
+        if hit["dish_name"] in menu_by_name
+    ]
+    return {"success": True, "query": query, "retrieval_backend": "milvus", "items": items}
 
 
 @app.post("/api/delivery", tags=["配送"])
@@ -157,5 +211,9 @@ def reservation_detail(reservation_id: str) -> dict:
 
 @app.post("/api/chat", response_model=ChatResponse, tags=["智能体"])
 async def chat(request: ChatRequest) -> dict:
-    return {"session_id": request.session_id, **(await agent.reply(request.session_id, request.message))}
+    try:
+        return {"session_id": request.session_id, **(await agent.reply(request.session_id, request.message))}
+    except Exception as exc:
+        logger.exception("chat request failed")
+        raise HTTPException(status_code=503, detail="菜单检索服务暂时不可用，请稍后重试") from exc
 
