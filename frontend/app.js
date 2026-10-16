@@ -155,6 +155,7 @@ function appendMessage(role, text) {
   const messages = $("#chatMessages");
   messages.append(row);
   messages.scrollTop = messages.scrollHeight;
+  return bubble;
 }
 
 async function sendChatMessage(message) {
@@ -166,11 +167,46 @@ async function sendChatMessage(message) {
   localStorage.setItem("liu_he_chat_session", sessionId);
   const prompts = $("#quickPrompts");
   prompts.classList.add("hidden");
+  const answerBubble = appendMessage("assistant", "");
   try {
-    const data = await api("/api/chat", { method: "POST", body: JSON.stringify({ session_id: sessionId, message: text }) });
-    appendMessage("assistant", data.answer);
+    const response = await fetch("/api/chat/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "text/event-stream" },
+      body: JSON.stringify({ session_id: sessionId, message: text }),
+    });
+    if (!response.ok || !response.body) {
+      let body = {};
+      try { body = await response.json(); } catch {}
+      const detail = body.detail;
+      throw new Error(typeof detail === "string" ? detail : detail?.message || `请求失败（${response.status}）`);
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let streamError = null;
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+      const frames = buffer.split(/\r?\n\r?\n/);
+      buffer = frames.pop() || "";
+      for (const frame of frames) {
+        const eventName = frame.match(/^event:\s*(.+)$/m)?.[1]?.trim();
+        const dataText = frame.split(/\r?\n/).find((line) => line.startsWith("data:"))?.slice(5).trim();
+        if (!dataText) continue;
+        let payload = {};
+        try { payload = JSON.parse(dataText); } catch {}
+        if (eventName === "error") {
+          streamError = payload.message || "对话暂时不可用";
+        } else if (payload.token) {
+          answerBubble.textContent += payload.token;
+          $("#chatMessages").scrollTop = $("#chatMessages").scrollHeight;
+        }
+      }
+      if (done) break;
+    }
+    if (streamError) throw new Error(streamError);
   } catch (error) {
-    appendMessage("assistant", `刚才没有连上服务：${error.message}。请稍后再试。`);
+    answerBubble.textContent = `刚才没有连上服务：${error.message}。请稍后再试。`;
   }
 }
 

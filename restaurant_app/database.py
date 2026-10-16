@@ -2,12 +2,29 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
+
+from dotenv import load_dotenv
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    MetaData,
+    Numeric,
+    String,
+    Table,
+    Text,
+    create_engine,
+    func,
+    select,
+)
+from sqlalchemy.engine import URL, Engine
 
 ROOT_PATH = Path(__file__).resolve().parent.parent
+load_dotenv(ROOT_PATH / ".env")
 
 MENU_SEED = [
     ("小笼包", "点心", 28.0, "皮薄馅鲜，搭配姜丝与香醋。", ["鲜香", "咸鲜"], 1, 1, "含猪肉、含小麦"),
@@ -22,106 +39,123 @@ MENU_SEED = [
     ("蟹粉豆腐", "热菜", 58.0, "蟹粉鲜香，豆腐细嫩。", ["鲜香", "咸鲜"], 0, 0, "含蟹类、含大豆"),
 ]
 
-SCHEMA = """
-PRAGMA foreign_keys = ON;
-CREATE TABLE IF NOT EXISTS menu_items (
-    dish_name TEXT PRIMARY KEY,
-    category TEXT NOT NULL,
-    price REAL NOT NULL CHECK (price >= 0),
-    description TEXT NOT NULL,
-    flavors_json TEXT NOT NULL,
-    is_featured INTEGER NOT NULL DEFAULT 0 CHECK (is_featured IN (0, 1)),
-    is_available INTEGER NOT NULL DEFAULT 1 CHECK (is_available IN (0, 1)),
-    allergens TEXT NOT NULL DEFAULT ''
-);
-CREATE TABLE IF NOT EXISTS agent_operations (
-    request_id TEXT PRIMARY KEY,
-    thread_id TEXT NOT NULL,
-    operation_type TEXT NOT NULL,
-    payload_sha256 TEXT NOT NULL,
-    payload_json TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'PENDING',
-    reservation_id TEXT,
-    error_code TEXT,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS ix_agent_operations_thread_status
-    ON agent_operations(thread_id, status);
-CREATE TABLE IF NOT EXISTS reservations (
-    reservation_id TEXT PRIMARY KEY,
-    request_id TEXT NOT NULL UNIQUE,
-    thread_id TEXT NOT NULL,
-    customer_name TEXT NOT NULL,
-    phone TEXT NOT NULL,
-    num_people INTEGER NOT NULL CHECK (num_people > 0),
-    num_children INTEGER NOT NULL DEFAULT 0 CHECK (num_children >= 0),
-    arrival_time TEXT NOT NULL,
-    seat_preference TEXT NOT NULL,
-    main_dish_preference TEXT NOT NULL,
-    other_comments TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'CONFIRMED',
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (request_id) REFERENCES agent_operations(request_id)
-);
-CREATE INDEX IF NOT EXISTS ix_reservations_phone_created
-    ON reservations(phone, created_at);
-CREATE TABLE IF NOT EXISTS agent_operation_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    request_id TEXT NOT NULL,
-    step TEXT NOT NULL,
-    attempt INTEGER NOT NULL DEFAULT 0,
-    state TEXT NOT NULL,
-    error_code TEXT,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (request_id) REFERENCES agent_operations(request_id)
-);
-CREATE TABLE IF NOT EXISTS chat_sessions (
-    session_id TEXT PRIMARY KEY,
-    state_json TEXT NOT NULL DEFAULT '{}',
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-"""
+metadata = MetaData()
+menu_items = Table(
+    "menu_items",
+    metadata,
+    Column("dish_name", String(100), primary_key=True),
+    Column("category", String(50), nullable=False),
+    Column("price", Numeric(8, 2), nullable=False),
+    Column("description", Text, nullable=False),
+    Column("flavors_json", Text, nullable=False),
+    Column("is_featured", Boolean, nullable=False, server_default="0"),
+    Column("is_available", Boolean, nullable=False, server_default="1"),
+    Column("allergens", String(500), nullable=False, server_default=""),
+    Column("created_at", DateTime, nullable=False, server_default=func.current_timestamp()),
+    Column("updated_at", DateTime, nullable=False, server_default=func.current_timestamp()),
+    Index("ix_menu_category_available", "category", "is_available"),
+    Index("ix_menu_featured_available", "is_featured", "is_available"),
+)
+
+agent_operations = Table(
+    "agent_operations",
+    metadata,
+    Column("request_id", String(80), primary_key=True),
+    Column("thread_id", String(128), nullable=False),
+    Column("operation_type", String(48), nullable=False),
+    Column("payload_sha256", String(64), nullable=False),
+    Column("payload_json", Text, nullable=False),
+    Column("status", String(20), nullable=False, server_default="PENDING"),
+    Column("reservation_id", String(40)),
+    Column("error_code", String(80)),
+    Column("created_at", DateTime, nullable=False, server_default=func.current_timestamp()),
+    Column("updated_at", DateTime, nullable=False, server_default=func.current_timestamp()),
+    Index("ix_agent_operations_thread_status", "thread_id", "status"),
+)
+
+reservations = Table(
+    "reservations",
+    metadata,
+    Column("reservation_id", String(40), primary_key=True),
+    Column("request_id", String(80), ForeignKey("agent_operations.request_id"), nullable=False, unique=True),
+    Column("thread_id", String(128), nullable=False),
+    Column("customer_name", String(80), nullable=False),
+    Column("phone", String(32), nullable=False),
+    Column("num_people", Integer, nullable=False),
+    Column("num_children", Integer, nullable=False, server_default="0"),
+    Column("arrival_time", DateTime, nullable=False),
+    Column("seat_preference", String(128), nullable=False),
+    Column("main_dish_preference", String(512), nullable=False),
+    Column("other_comments", Text, nullable=False),
+    Column("status", String(20), nullable=False, server_default="CONFIRMED"),
+    Column("created_at", DateTime, nullable=False, server_default=func.current_timestamp()),
+    Index("ix_reservations_phone_created", "phone", "created_at"),
+)
+
+agent_operation_events = Table(
+    "agent_operation_events",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("request_id", String(80), ForeignKey("agent_operations.request_id"), nullable=False),
+    Column("step", String(48), nullable=False),
+    Column("attempt", Integer, nullable=False, server_default="0"),
+    Column("state", String(20), nullable=False),
+    Column("error_code", String(80)),
+    Column("created_at", DateTime, nullable=False, server_default=func.current_timestamp()),
+    Index("ix_operation_events_request_time", "request_id", "created_at"),
+)
+
+chat_sessions = Table(
+    "chat_sessions",
+    metadata,
+    Column("session_id", String(128), primary_key=True),
+    Column("state_json", Text, nullable=False),
+    Column("updated_at", DateTime, nullable=False, server_default=func.current_timestamp()),
+)
 
 
-def database_path() -> Path:
-    configured = os.getenv("DATABASE_PATH", "").strip()
-    path = Path(configured).expanduser() if configured else ROOT_PATH / "data" / "restaurant.sqlite3"
-    if not path.is_absolute():
-        path = ROOT_PATH / path
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return path
+def database_url() -> URL | str:
+    configured = os.getenv("MYSQL_URL", "").strip()
+    if configured:
+        return configured
+    return URL.create(
+        "mysql+pymysql",
+        username=os.getenv("MYSQL_USER", "root"),
+        password=os.getenv("MYSQL_PASSWORD", ""),
+        host=os.getenv("MYSQL_HOST", "127.0.0.1"),
+        port=int(os.getenv("MYSQL_PORT", "3306")),
+        database=os.getenv("MYSQL_DATABASE", "menu"),
+        query={"charset": os.getenv("MYSQL_CHARSET", "utf8mb4")},
+    )
 
 
-@contextmanager
-def connect() -> Iterator[sqlite3.Connection]:
-    connection = sqlite3.connect(database_path(), timeout=10)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
-    connection.execute("PRAGMA busy_timeout = 10000")
-    try:
-        yield connection
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
+engine: Engine = create_engine(database_url(), pool_pre_ping=True, pool_recycle=1800)
 
 
 def initialize_database() -> None:
-    with connect() as connection:
-        connection.executescript(SCHEMA)
-        count = connection.execute("SELECT COUNT(*) AS count FROM menu_items").fetchone()["count"]
+    """Create the course MySQL schema and seed the sample menu when empty."""
+    metadata.create_all(engine)
+    with engine.begin() as connection:
+        count = connection.execute(select(func.count()).select_from(menu_items)).scalar_one()
         if count == 0:
-            connection.executemany(
-                """INSERT INTO menu_items
-                   (dish_name, category, price, description, flavors_json,
-                    is_featured, is_available, allergens)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            connection.execute(
+                menu_items.insert(),
                 [
-                    (name, category, price, description, json.dumps(flavors, ensure_ascii=False), featured, available, allergens)
+                    {
+                        "dish_name": name,
+                        "category": category,
+                        "price": price,
+                        "description": description,
+                        "flavors_json": json.dumps(flavors, ensure_ascii=False),
+                        "is_featured": bool(featured),
+                        "is_available": bool(available),
+                        "allergens": allergens,
+                    }
                     for name, category, price, description, flavors, featured, available, allergens in MENU_SEED
                 ],
             )
+
+
+def close_database() -> None:
+    engine.dispose()
 

@@ -46,7 +46,7 @@ class MockRestaurantAgent:
             repository.save_chat_state(session_id, state)
             return response
 
-        if re.search(r"预订|预约|订位", text):
+        if re.search(r"预订|预约|订位|订座", text):
             pending = {"request_id": str(uuid4()), "details": {}, "awaiting_confirmation": False}
             self._merge_reservation_details(pending["details"], text)
             state["pending_reservation"] = pending

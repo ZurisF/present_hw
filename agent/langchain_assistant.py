@@ -1,317 +1,225 @@
-from dotenv import load_dotenv
-from pathlib import Path
-from dataclasses import dataclass
-from typing import Any
-from langchain.tools import ToolRuntime, tool
+from __future__ import annotations
+
 import logging
-import pymysql
-from pymysql.cursors import DictCursor
 import os
-import time
-from uuid import uuid4
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
-from agent.mysql_reservations import MysqlReservationService, ReservationRequest
-from agent.recovery import OperationState
+from langchain.tools import ToolRuntime, tool
 
-load_dotenv()
+from restaurant_app import repository
+from restaurant_app.delivery import check_delivery as query_delivery
+from restaurant_app.faq import RedisFAQStore
+from restaurant_app.schemas import TravelMode
 
-ROOT_PATH = Path(__file__).parent.parent
-agent = None
-reservation_service = None
 logger = logging.getLogger(__name__)
-READ_RETRY_CODES = {1205, 1213, 2002, 2003, 2006, 2013}
 
 
 @dataclass(frozen=True)
-class AgentContext:
-    """Application-verified context; the model cannot supply these fields."""
-
-    confirmed_reservation: ReservationRequest | None = None
-    recovery_results: tuple[dict[str, Any], ...] = ()
+class AssistantContext:
+    session_id: str
+    confirmed_reservation: dict[str, Any] | None = None
 
 
-@tool
-def search_main_dishes():
-    """查询数据库中的特色菜和供应状态；空列表表示没有匹配记录。"""
-    trace_id = str(uuid4())
-    for attempt in range(1, 4):
-        try:
-            with pymysql.connect(
-                host=os.getenv("HOST"),
-                user=os.getenv("USER"),
-                password=os.getenv("PASSWORD"),
-                database=os.getenv("DATABASE"),
-                port=int(os.getenv("PORT", "3306")),
-                charset=os.getenv("CHARSET", "utf8mb4"),
-                connect_timeout=5,
-                read_timeout=10,
-                write_timeout=10,
-            ) as conn:
-                with conn.cursor(DictCursor) as cursor:
-                    cursor.execute("""
-                select 
-                    dish_name as 菜品名称, 
-                    price as 价格, 
-                    description as 描述, 
-                    category as 菜品类别, 
-                    spice_level as 麻辣程度, 
-                    flavor as 口味, 
-                    main_ingredients as 主料, 
-                    cooking_method as 烹饪方法, 
-                    is_vegetarian as 是否素食, 
-                    allergens as 过敏源,
-                    is_available as 当前可供应
-                    from menu_items
-                where 
-                    is_featured = 1
-                    """)
-                    main_dishes = cursor.fetchall()
-            logger.info(
-                "menu query completed",
-                extra={"trace_id": trace_id, "attempt": attempt},
-            )
-            return {
-                "status": "ok" if main_dishes else "not_found",
-                "items": main_dishes,
-            }
-        except pymysql.err.OperationalError as exc:
-            error_number = exc.args[0] if exc.args else None
-            if error_number in READ_RETRY_CODES and attempt < 3:
-                logger.warning(
-                    "transient menu query failure; retrying",
-                    extra={
-                        "trace_id": trace_id,
-                        "attempt": attempt,
-                        "error_code": "MENU_QUERY_TRANSIENT",
-                    },
-                )
-                time.sleep(0.25 * (2 ** (attempt - 1)))
-                continue
-            logger.error(
-                "menu database query failed",
-                extra={
-                    "trace_id": trace_id,
-                    "attempt": attempt,
-                    "error_code": "MENU_QUERY_FAILED",
-                },
-            )
-            return {"status": "tool_error", "error_code": "MENU_QUERY_FAILED"}
-        except (pymysql.MySQLError, TypeError, ValueError):
-            logger.error(
-                "menu database query failed",
-                extra={
-                    "trace_id": trace_id,
-                    "attempt": attempt,
-                    "error_code": "MENU_QUERY_FAILED",
-                },
-            )
-            return {"status": "tool_error", "error_code": "MENU_QUERY_FAILED"}
-
-
-@tool
-def check_menu_item(dish_name: str):
-    """用 MySQL 核实一道指定菜品是否存在及当前是否可供应。"""
-    if not dish_name.strip():
-        return {"status": "invalid_input", "error_code": "DISH_NAME_REQUIRED"}
-    trace_id = str(uuid4())
-    for attempt in range(1, 4):
-        try:
-            with pymysql.connect(
-                host=os.getenv("HOST"),
-                user=os.getenv("USER"),
-                password=os.getenv("PASSWORD"),
-                database=os.getenv("DATABASE"),
-                port=int(os.getenv("PORT", "3306")),
-                charset=os.getenv("CHARSET", "utf8mb4"),
-                connect_timeout=5,
-                read_timeout=10,
-                write_timeout=10,
-            ) as conn:
-                with conn.cursor(DictCursor) as cursor:
-                    cursor.execute(
-                        """
-                        SELECT dish_name, price, is_available
-                        FROM menu_items
-                        WHERE dish_name = %s
-                        LIMIT 1
-                        """,
-                        (dish_name.strip(),),
-                    )
-                    item = cursor.fetchone()
-            if item is None:
-                logger.info(
-                    "menu item lookup returned no match",
-                    extra={"trace_id": trace_id, "attempt": attempt},
-                )
-                return {"status": "not_found", "items": []}
-            return {
-                "status": "available" if item["is_available"] else "unavailable",
-                "item": item,
-            }
-        except pymysql.err.OperationalError as exc:
-            error_number = exc.args[0] if exc.args else None
-            if error_number in READ_RETRY_CODES and attempt < 3:
-                logger.warning(
-                    "transient availability query failure; retrying",
-                    extra={
-                        "trace_id": trace_id,
-                        "attempt": attempt,
-                        "error_code": "AVAILABILITY_QUERY_TRANSIENT",
-                    },
-                )
-                time.sleep(0.25 * (2 ** (attempt - 1)))
-                continue
-            logger.error(
-                "availability database query failed",
-                extra={
-                    "trace_id": trace_id,
-                    "attempt": attempt,
-                    "error_code": "AVAILABILITY_QUERY_FAILED",
-                },
-            )
-            return {"status": "tool_error", "error_code": "AVAILABILITY_QUERY_FAILED"}
-        except (pymysql.MySQLError, TypeError, ValueError):
-            logger.error(
-                "availability database query failed",
-                extra={
-                    "trace_id": trace_id,
-                    "attempt": attempt,
-                    "error_code": "AVAILABILITY_QUERY_FAILED",
-                },
-            )
-            return {"status": "tool_error", "error_code": "AVAILABILITY_QUERY_FAILED"}
-
-
-def get_reservation_service():
-    global reservation_service
-    if reservation_service is None:
-        reservation_service = MysqlReservationService()
-    return reservation_service
-
-
-@tool
-def create_reservation(runtime: ToolRuntime[AgentContext]) -> dict:
-    """提交已经由应用层二次确认的预约；未确认时不会写入数据库。"""
-    context = runtime.context
-    request = context.confirmed_reservation if context is not None else None
-    if request is None:
-        return {
-            "status": "confirmation_required",
-            "message": "Collect the reservation details and wait for explicit confirmation.",
-        }
-
-    outcome = get_reservation_service().create_or_resume(request)
-    result = outcome.result if isinstance(outcome.result, dict) else {}
-    return {
-        "status": outcome.state.value,
-        "reservation_id": result.get("reservation_id", result.get("id")),
-        "error_code": outcome.error_code,
-        "attempts": outcome.attempts,
-        "message": outcome.message,
-    }
-
-
-@tool
-def get_recovery_status(runtime: ToolRuntime[AgentContext]) -> list[dict[str, Any]]:
-    """读取应用恢复中间件查库后的预约操作状态。"""
-    context = runtime.context
-    if context is None:
-        return []
-    return list(context.recovery_results)
-
-
-def recover_pending_reservations(thread_id: str):
-    """Application recovery hook: reconcile DB writes before resuming the agent."""
-    return get_reservation_service().recover_thread(thread_id)
-
-
-def invoke_agent(
-    messages: list[dict[str, str]],
-    thread_id: str,
-    confirmed_reservation: ReservationRequest | None = None,
-    recover_pending: bool = False,
-):
-    """Invoke with app-owned confirmation context and a stable conversation ID.
-
-    The host application must only pass ``confirmed_reservation`` after the
-    second confirmation and must preserve its request_id across retries.
-    """
-    recovery_results: tuple[dict[str, Any], ...] = ()
-    if recover_pending:
-        try:
-            outcomes = recover_pending_reservations(thread_id)
-            recovery_results = tuple(
-                {
-                    "operation_id": outcome.operation_id,
-                    "state": outcome.state.value,
-                    "reservation_id": (
-                        outcome.result.get("reservation_id", outcome.result.get("id"))
-                        if isinstance(outcome.result, dict)
-                        else None
-                    ),
-                    "error_code": outcome.error_code,
-                    "message": outcome.message,
-                }
-                for outcome in outcomes
-            )
-        except Exception:
-            recovery_results = (
-                {
-                    "state": OperationState.NEEDS_REVIEW.value,
-                    "error_code": "RECOVERY_CHECK_FAILED",
-                    "message": "The operation status could not be verified.",
-                },
-            )
-
-    return get_agent().invoke(
-        {"messages": messages},
-        config={"configurable": {"thread_id": thread_id}},
-        context=AgentContext(
-            confirmed_reservation=confirmed_reservation,
-            recovery_results=recovery_results,
-        ),
-    )
-
-
-def get_agent():
-    global agent
-    if agent is None:
-        from langchain.agents import create_agent
-        from langchain.chat_models import init_chat_model
-        from langgraph.checkpoint.memory import InMemorySaver
-        
-        checkpointer = InMemorySaver()
-        llm = init_chat_model("gpt-4o")
-        with open(str(ROOT_PATH / "agent/prompt/system_prompt.txt"), "r", encoding="utf-8") as f:
-            system_prompt = f.read()
-        
-        all_tools = [
-            search_main_dishes,
-            check_menu_item,
-            create_reservation,
-            get_recovery_status,
-        ]
-        agent = create_agent(
-            model=llm,
-            tools=all_tools,
-            system_prompt=system_prompt,
-            checkpointer=checkpointer,
-            context_schema=AgentContext,
+def _content_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            str(part.get("text", "")) if isinstance(part, dict) else str(part)
+            for part in content
         )
-        
-    return agent
-        
-        
-if __name__ == "__main__":
-    res = invoke_agent(
-        messages=[
-            {"role": "user", "content": "你们餐厅有什么特色菜品吗？"}
-        ],
-        thread_id="001",
-    )
-    print(res["messages"][-1].content)
-    
-    
-    # res = search_main_dishes.invoke({})
-    # print(res)
-    
+    return str(content)
+
+
+def _intent_for(text: str) -> str:
+    if re.search(r"配送|送到", text):
+        return "delivery"
+    if re.search(r"地址|电话|营业|几点", text):
+        return "faq"
+    if re.search(r"特色菜|招牌菜|推荐菜", text):
+        return "featured_recommendation"
+    if re.search(r"清淡|鲜香|麻辣|香辣|甜口|咸甜|浓郁|口味", text):
+        return "flavor_recommendation"
+    if re.search(r"菜单|菜品|吃什么|推荐|想吃", text):
+        return "menu_search"
+    if re.search(r"预订|预约|订位", text):
+        return "reservation_lookup"
+    return "assistant"
+
+
+class RestaurantAssistant:
+    """LangChain create_agent with the course stack and application-owned tools."""
+
+    def __init__(self, menu_index: Any, faq_store: RedisFAQStore, mcp_tools: list[Any] | None = None) -> None:
+        from langchain.agents import create_agent
+        from langgraph.checkpoint.memory import InMemorySaver
+
+        self.menu_index = menu_index
+        self.faq_store = faq_store
+        self._reservation_tool = self._build_reservation_tool()
+        tools = [
+            self._build_search_menu_tool(),
+            self._build_check_menu_tool(),
+            self._build_faq_tool(),
+            self._build_delivery_tool(),
+            self._build_reservation_lookup_tool(),
+            self._reservation_tool,
+            *(mcp_tools or []),
+        ]
+        model = self._build_model()
+        prompt_path = Path(__file__).resolve().parent / "prompt" / "system_prompt.txt"
+        system_prompt = prompt_path.read_text(encoding="utf-8")
+        self.graph = create_agent(
+            model=model,
+            tools=tools,
+            system_prompt=system_prompt,
+            checkpointer=InMemorySaver(),
+            context_schema=AssistantContext,
+        )
+
+    @staticmethod
+    def _build_model() -> Any:
+        provider = os.getenv("AGENT_PROVIDER", "mock").strip().lower()
+        if provider == "mock":
+            from agent.mock_chat_model import MockRestaurantChatModel
+
+            return MockRestaurantChatModel()
+        if provider == "openai":
+            from langchain_openai import ChatOpenAI
+
+            api_key = os.getenv("OPENAI_API_KEY", "").strip()
+            if not api_key:
+                raise RuntimeError("OPENAI_API_KEY is required when AGENT_PROVIDER=openai")
+            return ChatOpenAI(
+                model=os.getenv("OPENAI_MODEL", "gpt-4o"),
+                api_key=api_key,
+                temperature=0,
+                timeout=float(os.getenv("OPENAI_TIMEOUT_SECONDS", "30")),
+                max_retries=2,
+            )
+        raise RuntimeError("AGENT_PROVIDER must be 'mock' or 'openai'")
+
+    def _build_search_menu_tool(self) -> Any:
+        @tool
+        def search_menu(query: str, flavor: str = "", featured_only: bool = False, limit: int = 6) -> dict[str, Any]:
+            """通过 Milvus 语义检索餐厅菜单，并从 MySQL 核对价格和供应状态。"""
+            candidates = repository.featured_dishes() if featured_only else repository.list_menu(flavor=flavor or None)
+            hits = self.menu_index.search(query, limit=max(1, min(len(repository.list_menu()), 30)))
+            rank = {hit["dish_name"]: position for position, hit in enumerate(hits)}
+            ranked = sorted(candidates, key=lambda item: rank.get(item["dish_name"], len(rank)))
+            return {"status": "ok" if ranked else "not_found", "items": ranked[: max(1, min(limit, 10))]}
+
+        return search_menu
+
+    @staticmethod
+    def _build_check_menu_tool() -> Any:
+        @tool
+        def check_menu_item(dish_name: str) -> dict[str, Any]:
+            """从 MySQL 查询一道菜是否存在、价格和当前供应状态。"""
+            item = next((record for record in repository.list_menu() if record["dish_name"] == dish_name.strip()), None)
+            return {"status": "not_found", "item": None} if item is None else {"status": "ok", "item": item}
+
+        return check_menu_item
+
+    def _build_faq_tool(self) -> Any:
+        @tool
+        def faq_search(query: str, limit: int = 3) -> dict[str, Any]:
+            """在 Redis FAQ 中按字符串和 Jaccard 相似度检索餐厅常见问题。"""
+            return self.faq_store.search(query, limit=limit)
+
+        return faq_search
+
+    @staticmethod
+    def _build_delivery_tool() -> Any:
+        @tool
+        async def check_delivery(address: str, travel_mode: str = "2") -> dict[str, Any]:
+            """使用高德 MCP 查询地址并计算配送距离；travel_mode 为 1 骑行、2 驾车、3 直线。"""
+            try:
+                mode = TravelMode(travel_mode)
+            except ValueError:
+                return {"success": False, "message": "出行方式无效，请选择骑行、驾车或直线距离。"}
+            return await query_delivery(address, mode)
+
+        return check_delivery
+
+    @staticmethod
+    def _build_reservation_lookup_tool() -> Any:
+        @tool
+        def reservation_lookup(
+            runtime: ToolRuntime[AssistantContext],
+            phone: str = "",
+            reservation_id: str = "",
+        ) -> dict[str, Any]:
+            """按预订编号、手机号或当前会话查询已登记的预订。"""
+            context = runtime.context
+            if context is None:
+                return {"status": "invalid_context", "items": []}
+            if reservation_id.strip():
+                record = repository.reservation_by_id(reservation_id.strip())
+                records = [record] if record else []
+            else:
+                records = repository.list_reservations(
+                    phone=phone.strip() or None,
+                    thread_id=None if phone.strip() else context.session_id,
+                    limit=20,
+                )
+            return {"status": "ok" if records else "not_found", "items": records}
+
+        return reservation_lookup
+
+    @staticmethod
+    def _build_reservation_tool() -> Any:
+        @tool
+        def create_reservation(runtime: ToolRuntime[AssistantContext]) -> dict[str, Any]:
+            """提交由应用二次确认后写入 context 的预订；模型不能自行提供确认状态。"""
+            context = runtime.context
+            details = context.confirmed_reservation if context is not None else None
+            if not details:
+                return {"status": "confirmation_required", "message": "请先复述预订资料并等待用户明确确认。"}
+            try:
+                record = repository.create_reservation(
+                    details=details,
+                    request_id=str(details["request_id"]),
+                    thread_id=context.session_id,
+                )
+            except Exception:
+                logger.exception("confirmed reservation tool failed")
+                return {"status": "tool_error", "error_code": "RESERVATION_WRITE_FAILED"}
+            return {"status": "SUCCEEDED", "reservation": record}
+
+        return create_reservation
+
+    async def reply(self, session_id: str, message: str) -> dict[str, Any]:
+        result = await self.graph.ainvoke(
+            {"messages": [{"role": "user", "content": message}]},
+            config={"configurable": {"thread_id": session_id}},
+            context=AssistantContext(session_id=session_id),
+        )
+        final = next(
+            (
+                item for item in reversed(result.get("messages", []))
+                if getattr(item, "type", None) == "ai" and not getattr(item, "tool_calls", None)
+            ),
+            None,
+        )
+        if final is None:
+            raise RuntimeError("LangChain agent completed without a final assistant message")
+        return {"answer": _content_text(final.content), "intent": _intent_for(message)}
+
+    async def stream(self, session_id: str, message: str):
+        async for event in self.graph.astream(
+            {"messages": [{"role": "user", "content": message}]},
+            config={"configurable": {"thread_id": session_id}},
+            context=AssistantContext(session_id=session_id),
+            stream_mode="messages",
+        ):
+            if not isinstance(event, tuple) or not event:
+                continue
+            chunk = event[0]
+            content = getattr(chunk, "content", "")
+            text = _content_text(content)
+            if text:
+                yield text

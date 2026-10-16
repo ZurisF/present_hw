@@ -6,7 +6,6 @@ import math
 import os
 import re
 from dataclasses import dataclass
-from datetime import timedelta
 from typing import Any
 
 from restaurant_app.schemas import TravelMode
@@ -67,27 +66,37 @@ class DemoMapsProvider:
 class AmapMcpProvider:
     def __init__(self, url: str) -> None:
         self.url = url
+        self.transport = os.getenv("AMAP_MCP_TRANSPORT", "http").strip().lower() or "http"
+        self._client: Any | None = None
+        self._tools: list[Any] | None = None
+
+    async def tools(self) -> list[Any]:
+        if self._tools is not None:
+            return self._tools
+        try:
+            from langchain_mcp_adapters.client import MultiServerMCPClient
+
+            self._client = MultiServerMCPClient(
+                {
+                    "amap": {
+                        "transport": self.transport,
+                        "url": self.url,
+                    }
+                }
+            )
+            self._tools = await self._client.get_tools()
+            return self._tools
+        except Exception as exc:
+            logger.warning("AMap MCP tool discovery failed: %s", type(exc).__name__)
+            raise MapsServiceUnavailable from exc
 
     async def route(self, address: str, mode: TravelMode) -> RouteMetrics:
         try:
-            from mcp import ClientSession
-            from mcp.client.streamable_http import streamablehttp_client
-
-            async with streamablehttp_client(
-                self.url,
-                timeout=timedelta(seconds=20),
-                sse_read_timeout=timedelta(seconds=45),
-            ) as (read_stream, write_stream, _):
-                async with ClientSession(read_stream, write_stream) as session:
-                    await session.initialize()
-                    tool_list = await session.list_tools()
-                    available = {tool.name: tool for tool in tool_list.tools}
-                    # 六合大厦 is a course-project restaurant landmark. Keep its verified
-                    # service origin configurable instead of depending on geocoding a fictional POI.
-                    origin = f"{RESTAURANT_LOCATION[0]:.6f},{RESTAURANT_LOCATION[1]:.6f}"
-                    destination = await self._geocode(session, available, address)
-                    metrics = await self._route(session, available, origin, destination, mode)
-                    return metrics
+            available = {tool.name: tool for tool in await self.tools()}
+            # The restaurant origin is configurable because the classroom landmark is fictional.
+            origin = f"{RESTAURANT_LOCATION[0]:.6f},{RESTAURANT_LOCATION[1]:.6f}"
+            destination = await self._geocode(available, address)
+            return await self._route(available, origin, destination, mode)
         except AddressUnresolvable:
             raise
         except MapsServiceUnavailable:
@@ -96,12 +105,19 @@ class AmapMcpProvider:
             logger.warning("AMap MCP request failed: %s", type(exc).__name__)
             raise MapsServiceUnavailable from exc
 
-    async def _geocode(self, session: Any, available: dict[str, Any], address: str) -> str:
+    async def _invoke(self, tool: Any, arguments: dict[str, Any]) -> Any:
+        try:
+            return await tool.ainvoke(arguments)
+        except Exception as exc:
+            logger.warning("AMap MCP tool invocation failed: %s", type(exc).__name__)
+            raise MapsServiceUnavailable from exc
+
+    async def _geocode(self, available: dict[str, Any], address: str) -> str:
         if "maps_geo" not in available:
             raise MapsServiceUnavailable("AMap MCP server does not expose maps_geo")
-        result = await session.call_tool("maps_geo", {"address": address, "city": "上海"})
+        result = await self._invoke(available["maps_geo"], {"address": address, "city": "上海"})
         payload = _tool_payload(result)
-        if getattr(result, "isError", False):
+        if _contains_error(payload):
             raise MapsServiceUnavailable("AMap geocoding failed")
         location = _find_location(payload)
         if not location:
@@ -110,7 +126,6 @@ class AmapMcpProvider:
 
     async def _route(
         self,
-        session: Any,
         available: dict[str, Any],
         origin: str,
         destination: str,
@@ -120,22 +135,21 @@ class AmapMcpProvider:
             tool_name = "maps_distance"
             if tool_name not in available:
                 raise MapsServiceUnavailable("AMap MCP server does not expose maps_distance")
-            schema = _tool_schema(available[tool_name])
-            properties = schema.get("properties", {})
+            properties = getattr(available[tool_name], "args", {}) or {}
             arguments: dict[str, Any] = {"origins": origin, "destination": destination}
             if "type" in properties:
-                expected = properties["type"].get("type")
-                arguments["type"] = 0 if expected in {"integer", "number"} else "0"
+                expected = str(properties["type"]).lower()
+                arguments["type"] = 0 if "int" in expected or "float" in expected else "0"
         else:
             tool_name = "maps_direction_bicycling" if mode is TravelMode.RIDING else "maps_direction_driving"
             if tool_name not in available:
                 raise MapsServiceUnavailable(f"AMap MCP server does not expose {tool_name}")
             arguments = {"origin": origin, "destination": destination}
 
-        result = await session.call_tool(tool_name, arguments)
-        if getattr(result, "isError", False):
-            raise MapsServiceUnavailable("AMap route calculation failed")
+        result = await self._invoke(available[tool_name], arguments)
         payload = _tool_payload(result)
+        if _contains_error(payload):
+            raise MapsServiceUnavailable("AMap route calculation failed")
         distance = _find_number(payload, {"distance", "distance_m", "route_distance"})
         duration = _find_number(payload, {"duration", "duration_s"})
         if distance is None:
@@ -143,18 +157,37 @@ class AmapMcpProvider:
         return RouteMetrics(distance_m=distance, duration_s=duration)
 
 
+_maps_provider: DemoMapsProvider | AmapMcpProvider | None = None
+_maps_provider_key: tuple[str, str] | None = None
+
+
 def get_maps_provider() -> DemoMapsProvider | AmapMcpProvider:
+    global _maps_provider, _maps_provider_key
     provider = os.getenv("MAPS_PROVIDER", "auto").strip().lower()
     url = os.getenv("AMAP_MCP_URL", "").strip()
+    key = (provider, url)
+    if _maps_provider is not None and _maps_provider_key == key:
+        return _maps_provider
     if provider == "demo":
-        return DemoMapsProvider()
-    if provider == "amap":
+        selected: DemoMapsProvider | AmapMcpProvider = DemoMapsProvider()
+    elif provider == "amap":
         if not url:
             raise MapsServiceUnavailable("AMAP_MCP_URL is required when MAPS_PROVIDER=amap")
-        return AmapMcpProvider(url)
-    if url:
-        return AmapMcpProvider(url)
-    return DemoMapsProvider()
+        selected = AmapMcpProvider(url)
+    elif url:
+        selected = AmapMcpProvider(url)
+    else:
+        selected = DemoMapsProvider()
+    _maps_provider = selected
+    _maps_provider_key = key
+    return selected
+
+
+async def get_maps_agent_tools() -> list[Any]:
+    provider = get_maps_provider()
+    if isinstance(provider, AmapMcpProvider):
+        return await provider.tools()
+    return []
 
 
 async def check_delivery(address: str, mode: TravelMode) -> dict[str, Any]:
@@ -196,14 +229,14 @@ def mode_label(mode: TravelMode) -> str:
     }[mode]
 
 
-def _tool_schema(tool: Any) -> dict[str, Any]:
-    schema = getattr(tool, "inputSchema", None) or getattr(tool, "input_schema", None) or {}
-    if hasattr(schema, "model_dump"):
-        return schema.model_dump(by_alias=True)
-    return schema if isinstance(schema, dict) else {}
-
-
 def _tool_payload(result: Any) -> Any:
+    if isinstance(result, (dict, list)):
+        return result
+    if isinstance(result, str):
+        try:
+            return json.loads(result)
+        except (json.JSONDecodeError, TypeError):
+            return result
     structured = getattr(result, "structuredContent", None) or getattr(result, "structured_content", None)
     if structured is not None:
         return structured
@@ -216,6 +249,18 @@ def _tool_payload(result: Any) -> Any:
             except (json.JSONDecodeError, TypeError):
                 parts.append(text)
     return parts[0] if len(parts) == 1 else parts
+
+
+def _contains_error(value: Any) -> bool:
+    if isinstance(value, dict):
+        if value.get("isError") or value.get("is_error") or value.get("status") in {"error", "failed"}:
+            return True
+        return any(_contains_error(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_error(item) for item in value)
+    if isinstance(value, str):
+        return value.lstrip().lower().startswith(("error:", "错误：", "错误:"))
+    return False
 
 
 def _find_location(value: Any) -> str | None:
