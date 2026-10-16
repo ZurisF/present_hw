@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f7f3eb" />
+    <title>六合餐厅 · 一席上海味</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Noto+Serif+SC:wght@400;500;600;700;900&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/static/app.css" />
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <div class="site-shell">
+      <header class="topbar">
+        <a class="brand" href="#top" aria-label="六合餐厅首页">
+          <span class="brand-mark">六</span>
+          <span class="brand-copy"><strong>六合餐厅</strong><small>LIU HE · SHANGHAI CUISINE</small></span>
+        </a>
+        <nav class="main-nav" aria-label="主导航">
+          <a href="#menu">今日菜单</a>
+          <a href="#taste">口味推荐</a>
+          <a href="#booking">预订座位</a>
+          <a href="#delivery">配送范围</a>
+        </nav>
+        <a class="nav-cta" href="#assistant"><span>和餐厅助手聊聊</span><b>↗</b></a>
+      </header>
+
+      <main id="top">
+        <section class="hero">
+          <div class="hero-copy">
+            <div class="eyebrow"><span class="eyebrow-line"></span> A TABLE FOR EVERY GOOD DAY</div>
+            <h1>把上海的<br /><em>鲜与暖，</em>端上桌。</h1>
+            <p>在人民广场，认真做好一餐本帮味。看看今天的菜单，找一道合你口味的菜，也可以直接问问餐厅助手。</p>
+            <div class="hero-actions">
+              <a class="button button-dark" href="#menu">看看今日菜单 <span>↓</span></a>
+              <a class="text-link" href="#booking">留一席座位 <span>↗</span></a>
+            </div>
+            <div class="hero-note"><span class="status-dot"></span> 今日营业 <span class="note-separator">·</span> 周日至周四 10:00–21:00 <span class="note-separator">·</span> 周五、周六至 23:00</div>
+          </div>
+          <div class="hero-art" aria-label="六合餐厅本帮菜插画">
+            <div class="art-sun"></div>
+            <div class="art-ring ring-one"></div><div class="art-ring ring-two"></div>
+            <div class="art-label art-label-top">本帮风味<br /><span>SHANGHAI, MADE WARM</span></div>
+            <div class="bowl-shadow"></div>
+            <div class="bowl"><div class="bowl-rim"></div><div class="soup"><span class="soup-herb herb-one"></span><span class="soup-herb herb-two"></span><span class="soup-herb herb-three"></span><span class="soup-oil oil-one"></span><span class="soup-oil oil-two"></span></div><div class="bowl-base"></div></div>
+            <div class="art-chop chop-one"></div><div class="art-chop chop-two"></div>
+            <div class="art-label art-label-bottom"><strong>从一口鲜开始</strong><span>小笼 · 鲈鱼 · 红烧肉</span></div>
+            <div class="art-stamp">沪<br />味</div>
+          </div>
+          <div class="hero-index"><span>01</span><i></i><span>04</span></div>
+        </section>
+
+        <section class="welcome-strip" aria-label="餐厅信息">
+          <div><span class="strip-number">01</span><strong>当季菜单</strong><small>每日用心挑选鲜味</small></div>
+          <div><span class="strip-number">02</span><strong>口味推荐</strong><small>清淡、鲜香或浓郁</small></div>
+          <div><span class="strip-number">03</span><strong>轻松预订</strong><small>确认后立即登记</small></div>
+          <div><span class="strip-number">04</span><strong>配送查询</strong><small>先确认是否送得到</small></div>
+        </section>
+
+        <section class="section menu-section" id="menu">
+          <div class="section-heading">
+            <div><div class="eyebrow"><span class="eyebrow-line"></span> FROM OUR KITCHEN</div><h2>今日菜单<span class="heading-period">.</span></h2></div>
+            <p>熟悉的本帮味，选用简单的新鲜食材。<br />每道菜的供应状态都在这里如实更新。</p>
+          </div>
+          <div class="menu-toolbar">
+            <div class="filter-list" id="menuFilters" aria-label="菜单分类">
+              <button class="filter-chip active" data-category="">全部菜品</button>
+              <button class="filter-chip" data-category="热菜">热菜</button>
+              <button class="filter-chip" data-category="点心">点心</button>
+              <button class="filter-chip" data-category="主食">主食</button>
+              <button class="filter-chip" data-category="凉菜">凉菜</button>
+              <button class="filter-chip" data-category="甜品">甜品</button>
+            </div>
+            <label class="search-box"><span>⌕</span><input id="menuSearch" type="search" placeholder="搜一道菜" aria-label="搜索菜单" /></label>
+          </div>
+          <div class="menu-grid" id="menuGrid" aria-live="polite"><div class="loading-card">正在为你准备菜单…</div></div>
+          <div class="menu-footnote"><span class="tiny-star">✳</span> 菜品供应情况以餐厅实时记录为准；如有过敏需求，请在预订备注中告知。</div>
+        </section>
+
+        <section class="taste-section" id="taste">
+          <div class="taste-orbit orbit-a"></div><div class="taste-orbit orbit-b"></div>
+          <div class="taste-copy">
+            <div class="eyebrow eyebrow-light"><span class="eyebrow-line"></span> FIND YOUR FLAVOUR</div>
+            <h2>今天想吃<br />什么味道？</h2>
+            <p>选一个此刻的心情，让我们从菜单里为你找几道合适的菜。</p>
+            <div class="taste-options" id="tasteOptions">
+              <button data-flavor="清淡">清淡 · 鲜爽</button>
+              <button data-flavor="鲜香">鲜香 · 有滋味</button>
+              <button data-flavor="麻辣">麻辣 · 过瘾</button>
+              <button data-flavor="香辣">香辣 · 开胃</button>
+              <button data-flavor="甜口">甜口 · 温柔</button>
+              <button data-flavor="咸甜">咸甜 · 本帮</button>
+              <button data-flavor="浓郁">浓郁 · 醇厚</button>
+            </div>
+          </div>
+          <div class="taste-result" id="tasteResult"><div class="result-empty"><span class="result-spark">✳</span><strong>从一个口味开始</strong><small>你的推荐会出现在这里</small></div></div>
+          <div class="taste-side-note">GOOD FOOD<br />FOLLOWS<br />GOOD FEELING</div>
+        </section>
+
+        <section class="reservation-section section" id="booking">
+          <div class="reservation-intro">
+            <div class="eyebrow"><span class="eyebrow-line"></span> SAVE YOUR SEAT</div>
+            <h2>好好吃饭，<br /><em>先留一席。</em></h2>
+            <p>告诉我们你的到店时间和偏好。提交前会先给你核对，确认后才会登记预订。</p>
+            <div class="booking-aside"><span class="aside-icon">⌂</span><div><strong>六合餐厅</strong><small>上海市黄浦区人民广场六合大厦</small></div></div>
+            <div class="booking-aside"><span class="aside-icon">◷</span><div><strong>营业时间</strong><small>周日至周四 10:00–21:00<br />周五、周六 10:00–23:00</small></div></div>
+          </div>
+          <div class="booking-card">
+            <div class="card-topline"><span>TABLE RESERVATION</span><span>01 — 02</span></div>
+            <form id="reservationForm" class="form-grid">
+              <label class="field field-half"><span>预订人 <i>*</i></span><input name="customer_name" required maxlength="80" placeholder="怎么称呼你" /></label>
+              <label class="field field-half"><span>联系电话 <i>*</i></span><input name="phone" required inputmode="tel" maxlength="32" placeholder="方便联系的号码" /></label>
+              <label class="field field-half"><span>就餐人数 <i>*</i></span><select name="num_people" required><option value="">请选择</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option><option>7</option><option>8</option><option>9</option><option>10</option></select></label>
+              <label class="field field-half"><span>其中儿童</span><select name="num_children"><option value="0">0 位</option><option>1</option><option>2</option><option>3</option><option>4</option></select></label>
+              <label class="field field-half"><span>到店时间（上海时间）<i>*</i></span><input name="arrival_time" type="datetime-local" required /></label>
+              <label class="field field-half"><span>座位偏好 <i>*</i></span><select name="seat_preference" required><option value="">请选择</option><option>靠窗</option><option>大厅</option><option>包间</option><option>安静位置</option><option>需要儿童座椅</option></select></label>
+              <label class="field"><span>主菜偏好 <i>*</i></span><input name="main_dish_preference" required maxlength="512" placeholder="例如：清蒸鲈鱼；没有特别偏好可填不限" /></label>
+              <label class="field"><span>其他备注</span><textarea name="other_comments" rows="2" maxlength="1000" placeholder="过敏提醒、庆祝安排或其他需求"></textarea></label>
+              <button class="button button-dark booking-submit" type="submit">核对预订信息 <span>→</span></button>
+            </form>
+            <div class="confirmation-panel hidden" id="confirmationPanel" aria-live="polite">
+              <div class="confirm-mark">✓</div><div class="eyebrow">PLEASE REVIEW</div><h3>确认这席安排</h3><p id="reservationSummary"></p>
+              <div class="confirm-actions"><button class="button button-dark" id="confirmReservation" type="button">确认并提交 <span>→</span></button><button class="text-link" id="editReservation" type="button">返回修改</button></div>
+              <div class="form-message" id="reservationMessage" role="status"></div>
+            </div>
+            <div class="card-bottomline"><span>所有预订都需要显式确认后才会写入。</span><span>02</span></div>
+          </div>
+        </section>
+
+        <section class="lookup-section">
+          <div class="lookup-heading"><div><div class="eyebrow"><span class="eyebrow-line"></span> YOUR BOOKINGS</div><h2>找回预订</h2></div><p>用预订时填写的手机号<br />查看近期预订记录。</p></div>
+          <form id="lookupForm" class="lookup-form"><label class="search-box"><span>⌕</span><input id="lookupPhone" inputmode="tel" placeholder="输入联系电话" required minlength="5" /></label><button class="button button-outline" type="submit">查询记录 <span>→</span></button></form>
+          <div id="reservationList" class="reservation-list" aria-live="polite"></div>
+        </section>
+
+        <section class="delivery-section" id="delivery">
+          <div class="delivery-art"><div class="delivery-map-grid"></div><div class="map-pin pin-origin"><span>六</span></div><div class="map-pin pin-destination"><span>⌂</span></div><div class="delivery-route route-one"></div><div class="delivery-route route-two"></div><div class="map-caption caption-origin">人民广场<br /><small>LIU HE</small></div><div class="map-caption caption-destination">你的地址<br /><small>DELIVERY CHECK</small></div><div class="map-range"><span>5 KM</span><i></i></div><div class="map-note">先确认距离<br />再安心点餐</div></div>
+          <div class="delivery-copy">
+            <div class="eyebrow eyebrow-light"><span class="eyebrow-line"></span> GOOD FOOD, CLOSER</div>
+            <h2>好味道，<br /><em>送得到吗？</em></h2>
+            <p>输入完整地址，先确认是否在六合餐厅的配送范围内。路线会按你选择的出行方式计算。</p>
+            <form id="deliveryForm" class="delivery-form">
+              <label class="field"><span>配送地址</span><input name="address" required minlength="2" maxlength="240" placeholder="例如：上海市浦东新区陆家嘴环路1000号" /></label>
+              <div class="delivery-controls"><label class="field"><span>计算方式</span><select name="travel_mode"><option value="2">驾车路线</option><option value="1">骑行路线</option><option value="3">直线距离</option></select></label><button class="button button-cream" type="submit">查询配送 <span>→</span></button></div>
+            </form>
+            <div class="delivery-result hidden" id="deliveryResult" aria-live="polite"></div>
+            <div class="delivery-footnote"><span class="status-dot"></span> 默认配送半径 5 公里 <span>·</span> <span id="mapProviderNotice">正在读取地图来源</span> <span>·</span> 接口也可在 <a href="/doc" target="_blank" rel="noreferrer">API 文档</a> 中调用</div>
+          </div>
+        </section>
+
+        <section class="assistant-section section" id="assistant">
+          <div class="assistant-heading"><div><div class="eyebrow"><span class="eyebrow-line"></span> YOUR RESTAURANT COMPANION</div><h2>想吃什么，<br /><em>聊两句就知道。</em></h2></div><div class="assistant-note"><span class="status-dot"></span><span>餐厅助手在线<br /><small>菜单、推荐、预订、配送都能问</small></span></div></div>
+          <div class="chat-card">
+            <div class="chat-sidebar"><div class="chat-avatar">六</div><strong>六合餐厅助手</strong><small>LIU HE RESTAURANT</small><p>我可以带你看看菜单、挑一道合口味的菜，也能帮你查配送和预订。</p><div class="chat-capabilities"><span>菜单展示</span><span>口味推荐</span><span>预订登记</span><span>配送查询</span></div><div class="mock-notice">规则型 Agent 演示版<br />无需模型密钥</div></div>
+            <div class="chat-main">
+              <div class="chat-top"><div><strong>和餐厅助手聊聊</strong><small>回复通常很快</small></div><span class="online-pill"><i></i> ONLINE</span></div>
+              <div class="chat-messages" id="chatMessages" aria-live="polite"><div class="message-row assistant-row"><span class="mini-avatar">六</span><div class="message-bubble">你好，欢迎来到六合餐厅。今天想看看菜单、找道合口味的菜，还是先查查能不能送到？</div></div></div>
+              <div class="quick-prompts" id="quickPrompts"><button>推荐几道清淡口味的菜</button><button>有什么特色菜？</button><button>能送到上海市浦东新区陆家嘴吗？</button><button>我想预订座位</button></div>
+              <form id="chatForm" class="chat-input-row"><input id="chatInput" autocomplete="off" maxlength="2000" placeholder="写下你想问的事…" aria-label="发送给餐厅助手" /><button type="submit" aria-label="发送消息">↑</button></form>
+              <div class="chat-caption">演示版使用确定性规则处理对话；配送查询与上方表单共用同一配送服务。</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="closing-band"><div class="closing-mark">六</div><p>一口上海味，<br /><em>一席好心情。</em></p><a class="button button-cream" href="#booking">现在预订 <span>↗</span></a></section>
+      </main>
+
+      <footer class="footer"><a class="brand" href="#top"><span class="brand-mark">六</span><span class="brand-copy"><strong>六合餐厅</strong><small>LIU HE · SHANGHAI CUISINE</small></span></a><div class="footer-address">上海市黄浦区人民广场六合大厦<br /><span>周日至周四 10:00–21:00 · 周五、周六 10:00–23:00</span></div><div class="footer-right">一桌本帮味 <span>© LIU HE</span></div></footer>
+    </div>
+  </body>
+</html>
